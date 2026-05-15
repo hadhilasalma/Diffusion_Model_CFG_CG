@@ -27,7 +27,7 @@ tools/pptx/
 
 # Misc file types
 *.xml
-*.md
+
 
 *.tmp
 *.log
