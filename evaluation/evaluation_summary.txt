@@ -1,0 +1,52 @@
+
+DIFFUSION MODEL EVALUATION SUMMARY
+==================================
+
+1. VISUAL QUALITY
+   - Check generated_samples.png for visual quality
+   - Look for clear digit shapes and proper centering
+   - Avoid noise and artifacts
+
+2. GUIDANCE EFFECTIVENESS
+   - Compare unconditional vs guided samples
+   - Higher guidance scale should produce more distinct classes
+   - Optimal guidance_scale: 7.5 for MNIST
+
+3. DIVERSITY
+   - Check if model generates varied samples
+   - Each class should have multiple style variations
+   - Avoid mode collapse (all samples identical)
+
+4. METRICS (If calculated)
+   - FID Score: Lower is better (target: <50 for MNIST)
+   - Inception Score: Higher is better (target: >7.5)
+
+5. TRAINING QUALITY
+   - Check training_loss.png for smooth loss decrease
+   - Loss should decrease monotonically
+   - No sudden jumps or divergence
+
+RESULTS INTERPRETATION
+======================
+
+Good Results:
+✓ Clear, recognizable digits
+✓ Proper centering and sizing
+✓ High diversity across samples
+✓ Strong difference between guided/unguided
+✓ Decreasing loss during training
+
+Needs Improvement:
+✗ Noisy or blurry output
+✗ Loss plateaus or diverges
+✗ Poor diversity (mode collapse)
+✗ Weak guidance effect
+✗ Misaligned or deformed digits
+
+NEXT STEPS
+==========
+1. Review generated samples visually
+2. If quality is poor, train longer (more epochs)
+3. Adjust guidance_scale (try 3.0 to 15.0)
+4. Check loss curve for convergence
+5. Consider increasing model size if underfitting

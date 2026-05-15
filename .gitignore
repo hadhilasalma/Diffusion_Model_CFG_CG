@@ -1,0 +1,34 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Dataset
+data/
+
+# Results and generated images (optional: remove these lines if you want to push results)
+results/
+
+# VS Code
+.vscode/
+
+# Backup
+_backup/
+
+# Claude
+.claude/
+
+# Tools - PowerPoint files
+tools/pptx/
+
+# Misc file types
+*.xml
+*.md
+
+*.tmp
+*.log
+*.bak
