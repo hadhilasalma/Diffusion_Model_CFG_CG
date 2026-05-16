@@ -36,7 +36,7 @@ def sample_cfg(
 
         noise_uncond = model(x_t, t_batch, null_labels)
 
-        if class_labels is not None and guidance_scale != 1.0:
+        if class_labels is not None:
             noise_cond = model(x_t, t_batch, class_labels)
             noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
         else:
