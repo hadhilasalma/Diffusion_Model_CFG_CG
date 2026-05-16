@@ -8,7 +8,6 @@ Reference: "Denoising Diffusion Probabilistic Models" (Ho et al., 2020)
 """
 
 import torch
-import math
 
 
 class DDPMScheduler:
@@ -64,19 +63,7 @@ class DDPMScheduler:
             (1.0 - self.alphas_cumprod)
         )
         self.posterior_variance = torch.clamp(self.posterior_variance, min=1e-20)
-        self.posterior_log_variance_clipped = torch.log(self.posterior_variance)
 
-        # Coefficient for x_0 prediction in reverse process
-        self.posterior_mean_coeff1 = (
-            self.betas * torch.sqrt(self.alphas_cumprod_prev) /
-            (1.0 - self.alphas_cumprod)
-        )
-
-        # Coefficient for x_t prediction in reverse process
-        self.posterior_mean_coeff2 = (
-            (1.0 - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) /
-            (1.0 - self.alphas_cumprod)
-        )
 
     def to(self, device):
         """Move all tensors to specified device."""
@@ -87,9 +74,6 @@ class DDPMScheduler:
         self.sqrt_one_minus_alphas_cumprod = self.sqrt_one_minus_alphas_cumprod.to(device)
         self.alphas_cumprod_prev = self.alphas_cumprod_prev.to(device)
         self.posterior_variance = self.posterior_variance.to(device)
-        self.posterior_log_variance_clipped = self.posterior_log_variance_clipped.to(device)
-        self.posterior_mean_coeff1 = self.posterior_mean_coeff1.to(device)
-        self.posterior_mean_coeff2 = self.posterior_mean_coeff2.to(device)
         return self
 
     def forward_process(self, x0, t, noise):
@@ -132,61 +116,6 @@ class DDPMScheduler:
 
         return x_t
 
-    def get_posterior_mean_and_variance(self, x0_pred, x_t, t):
-        """
-        Get mean and variance for reverse process p(x_{t-1}|x_t, x_0_pred).
-
-        Args:
-            x0_pred: Predicted x_0 from model
-            x_t: Current noisy image
-            t: Current timestep
-
-        Returns:
-            mean: Posterior mean
-            variance: Posterior variance
-        """
-        batch_size = x0_pred.shape[0]
-
-        # Get coefficients
-        coeff1 = self.posterior_mean_coeff1[t].reshape(batch_size, 1, 1, 1)
-        coeff2 = self.posterior_mean_coeff2[t].reshape(batch_size, 1, 1, 1)
-
-        # Posterior mean
-        mean = coeff1 * x0_pred + coeff2 * x_t
-
-        # Variance
-        var = self.posterior_variance[t].reshape(batch_size, 1, 1, 1)
-        log_var = self.posterior_log_variance_clipped[t].reshape(batch_size, 1, 1, 1)
-
-        return mean, var, log_var
-
-
-class LinearScheduler:
-    """
-    Alternative linear schedule (simpler than DDPM).
-    """
-
-    def __init__(self, num_timesteps=1000):
-        self.num_timesteps = num_timesteps
-
-        # Simple linear schedule
-        self.alphas = torch.linspace(1.0, 0.0, num_timesteps)
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
-
-    def to(self, device):
-        self.alphas = self.alphas.to(device)
-        self.alphas_cumprod = self.alphas_cumprod.to(device)
-        self.sqrt_alphas_cumprod = self.sqrt_alphas_cumprod.to(device)
-        self.sqrt_one_minus_alphas_cumprod = self.sqrt_one_minus_alphas_cumprod.to(device)
-        return self
-
-    def forward_process(self, x0, t, noise):
-        batch_size = x0.shape[0]
-        sqrt_alpha = self.sqrt_alphas_cumprod[t].reshape(batch_size, 1, 1, 1)
-        sqrt_one_minus_alpha = self.sqrt_one_minus_alphas_cumprod[t].reshape(batch_size, 1, 1, 1)
-        return sqrt_alpha * x0 + sqrt_one_minus_alpha * noise
 
 
 if __name__ == "__main__":
