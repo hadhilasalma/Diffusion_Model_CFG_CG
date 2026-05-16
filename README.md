@@ -9,7 +9,7 @@ A PyTorch implementation of DDPM (Denoising Diffusion Probabilistic Models) on M
 
 ## Demo
 
-![MNIST Diffusion Model Demo](assets/Screenshot 2026-05-16 at 3.41.14 PM.png)
+![MNIST Diffusion Model Demo](assets/img.png)
 
 > **CFG vs CG side-by-side** — the Streamlit app lets you pick a digit, tune guidance scales for both methods, and generate samples in real time. Run it with:
 >
