@@ -1,8 +1,5 @@
-"""
-Models module for diffusion models
-"""
-
-from .unet import SimpleUNet, TimeEmbedding, ConvBlock
+from .unet       import SimpleUNet
 from .classifier import SimpleClassifier
+from .fid_extractor import MNISTFeatureExtractor
 
-__all__ = ["SimpleUNet", "TimeEmbedding", "ConvBlock", "SimpleClassifier"]
+__all__ = ["SimpleUNet", "SimpleClassifier", "MNISTFeatureExtractor"]

@@ -21,9 +21,10 @@ st.set_page_config(page_title="Diffusion Model Demo", page_icon="✦", layout="w
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-METHOD_CFG   = "Classifier-Free Guidance"
-METHOD_CG    = "Classifier Guidance"
-METHOD_UNCOND = "Unconditional"
+METHOD_CFG     = "Classifier-Free Guidance"
+METHOD_CG      = "Classifier Guidance"
+METHOD_UNCOND  = "Unconditional"
+METHOD_COMPARE = "⚡ Compare CFG vs CG"
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -176,7 +177,42 @@ div[data-testid="stButton"] > button:hover {
 }
 .method-cfg  { background: #f3eeff; border-color: #c4b5fd; }
 .method-cg   { background: #ecfdf5; border-color: #6ee7b7; }
-.method-uncond { background: #fff7ed; border-color: #fcd34d; }
+.method-uncond   { background: #fff7ed; border-color: #fcd34d; }
+.method-compare  { background: linear-gradient(135deg, #f3eeff 0%, #ecfdf5 100%); border-color: #a78bfa; border-width: 2px; }
+
+/* ── Compare side-by-side ── */
+.compare-header {
+    background: linear-gradient(135deg, #e8d5ff 0%, #d1fae5 100%);
+    border-radius: 14px;
+    padding: 1rem 1.4rem;
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+.compare-badge {
+    display: inline-block;
+    border-radius: 8px;
+    padding: 3px 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+.badge-cfg { background: #7c3aed; color: white; }
+.badge-cg  { background: #059669; color: white; }
+.compare-col-header {
+    border-radius: 10px;
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.6rem;
+    text-align: center;
+}
+.cfg-col-header { background: #f3eeff; color: #7c3aed; border: 1.5px solid #c4b5fd; }
+.cg-col-header  { background: #ecfdf5; color: #059669; border: 1.5px solid #6ee7b7; }
+.tag-compare { background: linear-gradient(135deg, #7c3aed, #059669); color: white; }
 .method-tag {
     display: inline-block;
     border-radius: 6px;
@@ -344,7 +380,7 @@ with st.sidebar:
 
     method = st.selectbox(
         "Generation method",
-        [METHOD_CFG, METHOD_CG, METHOD_UNCOND],
+        [METHOD_CFG, METHOD_CG, METHOD_UNCOND, METHOD_COMPARE],
     )
 
     digit = st.selectbox(
@@ -356,14 +392,30 @@ with st.sidebar:
     )
 
     if method == METHOD_CFG:
-        scale = st.slider("Guidance scale  s", 1.0, 15.0, 7.5, 0.5)
+        scale     = st.slider("Guidance scale  s", 1.0, 15.0, 7.5, 0.5)
+        cfg_scale = scale
+        cg_scale  = 0.5
     elif method == METHOD_CG:
-        scale = st.slider("Guidance scale  s", 0.1, 3.0, 0.5, 0.1)
+        scale     = st.slider("Guidance scale  s", 0.1, 3.0, 0.5, 0.1)
+        cfg_scale = 7.5
+        cg_scale  = scale
+    elif method == METHOD_COMPARE:
+        st.markdown('<p style="font-size:0.7rem;color:#7c3aed;font-weight:600;margin-bottom:0.2rem;">CFG scale</p>', unsafe_allow_html=True)
+        cfg_scale = st.slider("CFG scale", 1.0, 15.0, 7.5, 0.5, label_visibility="collapsed")
+        st.markdown('<p style="font-size:0.7rem;color:#059669;font-weight:600;margin:0.6rem 0 0.2rem;">CG scale</p>', unsafe_allow_html=True)
+        cg_scale  = st.slider("CG scale",  0.1, 3.0,  0.5,  0.1, label_visibility="collapsed")
+        scale     = cfg_scale
     else:
-        scale = 1.0
+        scale     = 1.0
+        cfg_scale = 7.5
+        cg_scale  = 0.5
         st.caption("No guidance scale for unconditional mode.")
 
-    n_samples = st.select_slider("Samples to generate", [4, 9, 16], value=9)
+    n_samples = st.select_slider(
+        "Samples to generate",
+        [4, 9, 16] if method != METHOD_COMPARE else [4, 6],
+        value=4 if method == METHOD_COMPARE else 9,
+    )
 
     n_steps = st.radio(
         "Denoising steps",
@@ -407,7 +459,34 @@ col_out, col_notes = st.columns([3, 2], gap="large")
 with col_notes:
 
     # ── Method card ──
-    if method == METHOD_CFG:
+    if method == METHOD_COMPARE:
+        st.markdown(f"""
+        <div class="card" style="border-left: 4px solid #a78bfa; background: linear-gradient(135deg,#faf5ff,#f0fdf4);">
+          <div class="card-label" style="color:#7c3aed;">⚡ Head-to-Head Comparison</div>
+          <div class="card-body">
+            Runs <strong>both methods simultaneously</strong> on the same digit
+            so you can directly compare output quality and style.<br/><br/>
+            <span style="color:#7c3aed;font-weight:600;">CFG</span> — one model, two forward passes,
+            guidance blended in prediction space.<br/>
+            <div class="formula">ε̂ = ε_uncond + s · (ε_cond − ε_uncond)</div>
+            <span style="color:#059669;font-weight:600;">CG</span> — two models, gradient of a
+            noise-aware classifier steers each step.<br/>
+            <div class="formula">ε̂ = ε_θ − √(1−ᾱ_t) · s · ∇log p(y | x_t)</div>
+          </div>
+        </div>
+        <div class="card" style="border-left: 4px solid #f9a8d4;">
+          <div class="card-label" style="color:#db2777;">What to look for</div>
+          <div class="card-body">
+            • <strong>Sharpness</strong> — are the digit strokes clean and clear?<br/>
+            • <strong>Diversity</strong> — do samples look different from each other?<br/>
+            • <strong>Class accuracy</strong> — do all samples actually look like digit {digit}?<br/>
+            • <strong>Artifacts</strong> — any checkerboard patterns or blurry patches?<br/><br/>
+            CFG typically wins on image quality. CG shows the guidance mechanism more explicitly.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif method == METHOD_CFG:
         st.markdown("""
         <div class="card" style="border-left: 4px solid #a78bfa;">
           <div class="card-label" style="color:#7c3aed;">✦ Classifier-Free Guidance (CFG)</div>
@@ -535,56 +614,130 @@ with col_out:
     if generate:
         scheduler = load_scheduler()
 
-        method_colors = {
-            METHOD_CFG:    ("#7c3aed", "#f3eeff"),
-            METHOD_CG:     ("#059669", "#ecfdf5"),
-            METHOD_UNCOND: ("#d97706", "#fffbeb"),
-        }
-        accent, bg = method_colors[method]
-
-        # stat row
-        label_str = f"Digit  {digit}" if method != METHOD_UNCOND else "—"
-        scale_str = str(scale) if method != METHOD_UNCOND else "—"
-        st.markdown(
-            f'<div class="stat-row">'
-            f'<div class="stat-pill"><div class="stat-k">Method</div><div class="stat-v" style="color:{accent}">{method.split()[0]}</div></div>'
-            f'<div class="stat-pill"><div class="stat-k">Target</div><div class="stat-v">{label_str}</div></div>'
-            f'<div class="stat-pill"><div class="stat-k">Scale</div><div class="stat-v">{scale_str}</div></div>'
-            f'<div class="stat-pill"><div class="stat-k">Steps</div><div class="stat-v">{n_steps}</div></div>'
-            f'<div class="stat-pill"><div class="stat-k">Samples</div><div class="stat-v">{n_samples}</div></div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        pb = st.progress(0, text="Initialising…")
-
-        if method == METHOD_UNCOND:
-            model   = load_cfg_model()
-            samples = sample_cfg(model, scheduler, n_samples,
-                                 None, 1.0, n_steps, pb)
-        elif method == METHOD_CFG:
-            model  = load_cfg_model()
+        # ── COMPARE MODE ────────────────────────────────────────────────────────
+        if method == METHOD_COMPARE:
             labels = torch.full((n_samples,), digit, dtype=torch.long, device=DEVICE)
-            samples = sample_cfg(model, scheduler, n_samples,
-                                 labels, scale, n_steps, pb)
+
+            # stat row
+            st.markdown(
+                f'<div class="stat-row">'
+                f'<div class="stat-pill"><div class="stat-k">Mode</div><div class="stat-v" style="color:#7c3aed">CFG vs CG</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Digit</div><div class="stat-v">{digit}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">CFG s</div><div class="stat-v">{cfg_scale}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">CG s</div><div class="stat-v">{cg_scale}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Steps</div><div class="stat-v">{n_steps}</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # CFG pass
+            st.markdown('<p style="font-size:0.72rem;color:#7c3aed;font-weight:700;letter-spacing:1px;margin-bottom:0.3rem;">STEP 1 / 2 — Classifier-Free Guidance</p>', unsafe_allow_html=True)
+            pb1 = st.progress(0, text="CFG: initialising…")
+            cfg_model   = load_cfg_model()
+            cfg_samples = sample_cfg(cfg_model, scheduler, n_samples,
+                                     labels, cfg_scale, n_steps, pb1)
+            pb1.empty()
+
+            # CG pass
+            st.markdown('<p style="font-size:0.72rem;color:#059669;font-weight:700;letter-spacing:1px;margin-bottom:0.3rem;">STEP 2 / 2 — Classifier Guidance</p>', unsafe_allow_html=True)
+            pb2 = st.progress(0, text="CG: initialising…")
+            cg_model    = load_cg_model()
+            classifier  = load_classifier()
+            cg_samples  = sample_cg(cg_model, classifier, scheduler, n_samples,
+                                    labels, cg_scale, n_steps, pb2)
+            pb2.empty()
+
+            # Side-by-side display
+            st.markdown(
+                f'<div class="compare-header">'
+                f'<span style="font-size:0.9rem;font-weight:700;color:#2d1b69;">Digit {digit}  —  same target, different methods</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            left, right = st.columns(2, gap="medium")
+
+            with left:
+                st.markdown('<div class="compare-col-header cfg-col-header">CFG &nbsp;·&nbsp; Classifier-Free Guidance &nbsp;·&nbsp; s = ' + str(cfg_scale) + '</div>', unsafe_allow_html=True)
+                fig_cfg = render_grid(cfg_samples, METHOD_CFG)
+                st.pyplot(fig_cfg, use_container_width=True)
+                plt.close(fig_cfg)
+                st.markdown(
+                    f'<div class="card" style="background:#f3eeff;border-left:3px solid #a78bfa;padding:0.7rem 1rem;margin-top:0.5rem;">'
+                    f'<div class="card-body" style="font-size:0.75rem;">'
+                    f'1 model · 2 forward passes per step<br/>'
+                    f'Guidance in <em>prediction space</em><br/>'
+                    f'ε̂ = ε_u + {cfg_scale}·(ε_c − ε_u)'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+            with right:
+                st.markdown('<div class="compare-col-header cg-col-header">CG &nbsp;·&nbsp; Classifier Guidance &nbsp;·&nbsp; s = ' + str(cg_scale) + '</div>', unsafe_allow_html=True)
+                fig_cg = render_grid(cg_samples, METHOD_CG)
+                st.pyplot(fig_cg, use_container_width=True)
+                plt.close(fig_cg)
+                st.markdown(
+                    f'<div class="card" style="background:#ecfdf5;border-left:3px solid #6ee7b7;padding:0.7rem 1rem;margin-top:0.5rem;">'
+                    f'<div class="card-body" style="font-size:0.75rem;">'
+                    f'2 models · gradient per step<br/>'
+                    f'Guidance in <em>score space</em><br/>'
+                    f'ε̂ = ε_θ − {cg_scale}·√(1−ᾱ)·∇log p(y|x)'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        # ── SINGLE MODE ─────────────────────────────────────────────────────────
         else:
-            model      = load_cg_model()
-            classifier = load_classifier()
-            labels     = torch.full((n_samples,), digit, dtype=torch.long, device=DEVICE)
-            samples    = sample_cg(model, classifier, scheduler, n_samples,
-                                   labels, scale, n_steps, pb)
-        pb.empty()
+            method_colors = {
+                METHOD_CFG:    ("#7c3aed", "#f3eeff"),
+                METHOD_CG:     ("#059669", "#ecfdf5"),
+                METHOD_UNCOND: ("#d97706", "#fffbeb"),
+            }
+            accent, bg = method_colors[method]
 
-        fig = render_grid(samples, method)
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
+            label_str = f"Digit  {digit}" if method != METHOD_UNCOND else "—"
+            scale_str = str(scale) if method != METHOD_UNCOND else "—"
+            st.markdown(
+                f'<div class="stat-row">'
+                f'<div class="stat-pill"><div class="stat-k">Method</div><div class="stat-v" style="color:{accent}">{method.split()[0]}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Target</div><div class="stat-v">{label_str}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Scale</div><div class="stat-v">{scale_str}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Steps</div><div class="stat-v">{n_steps}</div></div>'
+                f'<div class="stat-pill"><div class="stat-k">Samples</div><div class="stat-v">{n_samples}</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-        caption = (
-            f"Generated {n_samples} samples"
-            + (f" of digit **{digit}**" if method != METHOD_UNCOND else "")
-            + f" · {method} · s = {scale_str} · {n_steps} denoising steps"
-        )
-        st.caption(caption)
+            pb = st.progress(0, text="Initialising…")
+
+            if method == METHOD_UNCOND:
+                model   = load_cfg_model()
+                samples = sample_cfg(model, scheduler, n_samples,
+                                     None, 1.0, n_steps, pb)
+            elif method == METHOD_CFG:
+                model  = load_cfg_model()
+                labels = torch.full((n_samples,), digit, dtype=torch.long, device=DEVICE)
+                samples = sample_cfg(model, scheduler, n_samples,
+                                     labels, scale, n_steps, pb)
+            else:
+                model      = load_cg_model()
+                classifier = load_classifier()
+                labels     = torch.full((n_samples,), digit, dtype=torch.long, device=DEVICE)
+                samples    = sample_cg(model, classifier, scheduler, n_samples,
+                                       labels, scale, n_steps, pb)
+            pb.empty()
+
+            fig = render_grid(samples, method)
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+
+            caption = (
+                f"Generated {n_samples} samples"
+                + (f" of digit **{digit}**" if method != METHOD_UNCOND else "")
+                + f" · {method} · s = {scale_str} · {n_steps} denoising steps"
+            )
+            st.caption(caption)
 
     else:
         # welcome state
@@ -618,5 +771,10 @@ with col_out:
           <span class="method-tag tag-uncond">UNCOND</span>
           <div class="method-name">Unconditional</div>
           <div class="method-desc">No class conditioning · Pure DDPM reverse process · Random digit generation</div>
+        </div>
+        <div class="method-card method-compare">
+          <span class="method-tag tag-compare">⚡ COMPARE</span>
+          <div class="method-name">CFG vs CG — Side by Side</div>
+          <div class="method-desc">Runs both methods on the same digit · Individual scales · Direct visual comparison</div>
         </div>
         """, unsafe_allow_html=True)

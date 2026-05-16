@@ -1,228 +1,138 @@
 """
-U-Net Architecture for Diffusion Models
+U-Net for DDPM
+==============
+The neural network that learns to predict noise ε given a noisy image x_t,
+a timestep t, and an optional class label y.
 
-This module contains the U-Net model that learns to predict noise
-in the reverse diffusion process.
+Architecture:
+    Encoder (downsample) → Bottleneck → Decoder (upsample) + skip connections
+
+Conditioning:
+    t and y are both embedded into a single 256-dim vector via sinusoidal
+    encoding + nn.Embedding, then injected into every ConvBlock via AdaGN
+    (Adaptive Group Normalisation — scale & shift learned from the embedding).
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
+
+# ── Time Embedding ─────────────────────────────────────────────────────────────
 
 class TimeEmbedding(nn.Module):
     """
-    Embed timestep into a vector (similar to positional encoding in transformers!)
-
-    The model needs to know "which timestep are we at?" so it knows how noisy
-    the image should be. This layer converts a scalar timestep into a vector.
+    Converts a scalar timestep t into a rich embed_dim-dimensional vector
+    using sinusoidal encoding (same as Transformer positional encoding).
+    Nearby timesteps → nearby vectors, giving the model a smooth time sense.
     """
 
-    def __init__(self, embed_dim):
-        """
-        Args:
-            embed_dim: Dimension of the time embedding vector
-        """
+    def __init__(self, embed_dim: int):
         super().__init__()
         self.embed_dim = embed_dim
 
-    def forward(self, t):
-        """
-        Convert timestep t to embedding vector using sinusoidal encoding.
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        # t: [B]  →  output: [B, embed_dim]
+        half = self.embed_dim // 2
+        freqs = torch.exp(
+            -math.log(10000) * torch.arange(half, device=t.device) / (half - 1)
+        )
+        args = t.float().unsqueeze(1) * freqs.unsqueeze(0)   # [B, half]
+        return torch.cat([torch.sin(args), torch.cos(args)], dim=1)  # [B, embed_dim]
 
-        Args:
-            t: Timestep tensor [batch_size]
 
-        Returns:
-            embedding: [batch_size, embed_dim]
-        """
-        # Create positional encoding (sin/cos pattern)
-        device = t.device
-        batch_size = t.shape[0]
-
-        # Generate sinusoidal features
-        half_dim = self.embed_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-
-        # Apply sin/cos (like transformers!)
-        emb = t.unsqueeze(1).float() * emb.unsqueeze(0)  # [batch_size, half_dim]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)  # [batch_size, embed_dim]
-
-        return emb
-
+# ── Conv Block (ResBlock + AdaGN) ──────────────────────────────────────────────
 
 class ConvBlock(nn.Module):
     """
-    Two-conv ResBlock: (Conv -> GroupNorm -> AdaGN -> GELU) x2 + residual skip.
+    Two-conv residual block with time/class conditioning via AdaGN.
 
-    Includes time embedding injection for conditioning.
+    AdaGN: after GroupNorm, scale and shift are predicted from the
+    time+class embedding rather than learned as fixed parameters.
+    This lets every block adapt its behaviour to the current timestep.
     """
 
-    def __init__(self, in_channels, out_channels, time_embed_dim):
-        """
-        Args:
-            in_channels: Number of input channels
-            out_channels: Number of output channels
-            time_embed_dim: Dimension of time embedding
-        """
+    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int):
         super().__init__()
-
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.norm1 = nn.GroupNorm(8, out_channels)
-
-        # AdaGN: project conditioning to scale + shift (2× channels)
+        self.conv1     = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.norm1     = nn.GroupNorm(8, out_channels)
+        # projects embedding → scale + shift (hence ×2)
         self.time_proj = nn.Linear(time_embed_dim, out_channels * 2)
-
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.norm2 = nn.GroupNorm(8, out_channels)
-
-        # 1×1 conv to match channels on the skip path when they differ
+        self.conv2     = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.norm2     = nn.GroupNorm(8, out_channels)
+        # 1×1 conv to align channels on the residual path when they differ
         self.skip = (
-            nn.Conv2d(in_channels, out_channels, kernel_size=1)
-            if in_channels != out_channels
-            else nn.Identity()
+            nn.Conv2d(in_channels, out_channels, 1)
+            if in_channels != out_channels else nn.Identity()
         )
 
-    def forward(self, x, time_emb):
-        """
-        Args:
-            x: [batch_size, channels, height, width]
-            time_emb: [batch_size, time_embed_dim]
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
+        h = self.norm1(self.conv1(x))
 
-        Returns:
-            output: [batch_size, out_channels, height, width]
-        """
-        out = self.norm1(self.conv1(x))
-
-        # AdaGN: split projection into scale and shift, apply to normalized features
+        # AdaGN: modulate normalised features with embedding-predicted scale & shift
         scale, shift = self.time_proj(time_emb).unsqueeze(-1).unsqueeze(-1).chunk(2, dim=1)
-        out = F.gelu(out * (1 + scale) + shift)
+        h = F.gelu(h * (1 + scale) + shift)
 
-        out = F.gelu(self.norm2(self.conv2(out)))
+        h = F.gelu(self.norm2(self.conv2(h)))
+        return h + self.skip(x)
 
-        return out + self.skip(x)
 
+# ── U-Net ──────────────────────────────────────────────────────────────────────
 
 class SimpleUNet(nn.Module):
     """
-    Simplified U-Net for diffusion model.
+    Lightweight U-Net for 28×28 grayscale images.
 
-    Structure:
-    - Downsampling path (squeeze information)
-    - Middle layers (process at low resolution)
-    - Upsampling path (expand back to original size)
-    - Skip connections (preserve details)
+    Input:  noisy image x_t  [B, 1, 28, 28]
+            timestep t        [B]
+            class label y     [B]  (use value 10 for "no class" / unconditional)
+    Output: predicted noise ε [B, 1, 28, 28]
 
-    Key: This network learns to predict the noise that was added!
+    The model outputs the NOISE that was added, not the clean image directly.
+    This ε-parameterisation (Ho et al. 2020) gives more stable training.
     """
 
-    def __init__(self, in_channels=1, out_channels=1, channels=128, time_embed_dim=256, num_classes=10, null_token=None):
-        """
-        Args:
-            in_channels: Number of input channels (1 for grayscale, 3 for RGB)
-            out_channels: Number of output channels (same as input for noise prediction)
-            channels: Base number of channels (will be scaled up in deeper layers)
-            time_embed_dim: Dimension of time embedding
-            num_classes: Number of classes for conditioning (10 for MNIST 0-9)
-            null_token: Index used as unconditional token (defaults to num_classes)
-        """
+    def __init__(self, in_channels: int = 1, out_channels: int = 1,
+                 channels: int = 64, time_embed_dim: int = 256,
+                 num_classes: int = 10):
         super().__init__()
+        self.null_token = num_classes   # label=10 means "unconditional"
 
-        if null_token is None:
-            null_token = num_classes
-        self.null_token = null_token
-        self.num_classes = num_classes
-
-        # Time embedding
-        self.time_embedding = TimeEmbedding(time_embed_dim)
-
-        # Class embedding (for conditional generation)
-        # num_classes + 1: indices 0-9 are real classes, index 10 is null/unconditional token
+        # ── Conditioning embeddings ──
+        self.time_embedding  = TimeEmbedding(time_embed_dim)
+        # indices 0–9: digit classes,  index 10: null token
         self.class_embedding = nn.Embedding(num_classes + 1, time_embed_dim)
 
-        # Downsampling blocks (encoder)
-        self.down1 = ConvBlock(in_channels, channels, time_embed_dim)
-        self.down2 = ConvBlock(channels, channels * 2, time_embed_dim)
+        # ── Encoder ──
+        self.down1 = ConvBlock(in_channels,  channels,     time_embed_dim)  # 28×28
+        self.down2 = ConvBlock(channels,     channels * 2, time_embed_dim)  # 14×14
 
-        # Middle blocks (bottleneck)
-        self.middle = ConvBlock(channels * 2, channels * 2, time_embed_dim)
+        # ── Bottleneck ──
+        self.middle = ConvBlock(channels * 2, channels * 2, time_embed_dim) #  7×7
 
-        # Upsampling blocks (decoder)
-        self.up1 = ConvBlock(channels * 4, channels, time_embed_dim)  # *4 because of skip connection
-        self.up2 = ConvBlock(channels * 2, channels, time_embed_dim)  # *2 because of skip connection
+        # ── Decoder (channels ×4 / ×2 because skip connections are cat'd) ──
+        self.up1 = ConvBlock(channels * 4, channels,     time_embed_dim)   # 14×14
+        self.up2 = ConvBlock(channels * 2, channels,     time_embed_dim)   # 28×28
 
-        # Final output
+        # ── Output ──
         self.final = nn.Conv2d(channels, out_channels, kernel_size=1)
 
-    def forward(self, x, t, class_label=None):
-        """
-        Args:
-            x: Noisy image [batch_size, channels, height, width]
-            t: Timestep [batch_size]
-            class_label: Class label [batch_size] or None for unconditional
-                        Use value num_classes (10 for MNIST) for unconditional
+    def forward(self, x: torch.Tensor,
+                t: torch.Tensor,
+                class_label: torch.Tensor) -> torch.Tensor:
+        # Build a single conditioning vector: time + class fused by addition
+        cond = self.time_embedding(t) + self.class_embedding(class_label)
 
-        Returns:
-            noise_prediction: Predicted noise [batch_size, out_channels, height, width]
-        """
-        # Validate input shapes
-        assert x.dim() == 4, f"Expected x to have 4 dimensions, got {x.dim()}"
-        assert t.dim() == 1, f"Expected t to have 1 dimension, got {t.dim()}"
-        assert x.shape[0] == t.shape[0], f"Batch size mismatch: x has {x.shape[0]}, t has {t.shape[0]}"
+        # Encoder
+        d1 = self.down1(x, cond)                                    # [B, C,  28, 28]
+        d2 = self.down2(F.max_pool2d(d1, 2), cond)                  # [B, 2C, 14, 14]
 
-        if class_label is not None:
-            assert class_label.dim() == 1, f"Expected class_label to have 1 dimension, got {class_label.dim()}"
-            assert class_label.shape[0] == x.shape[0], f"Batch size mismatch: x has {x.shape[0]}, class_label has {class_label.shape[0]}"
-            assert (class_label >= 0).all() and (class_label <= 10).all(), "Class labels must be in range [0, 10]"
+        # Bottleneck
+        m  = self.middle(F.max_pool2d(d2, 2), cond)                 # [B, 2C,  7,  7]
 
-        batch_size = x.shape[0]
+        # Decoder — upsample then concat skip connection
+        u1 = self.up1(torch.cat([F.interpolate(m,  scale_factor=2), d2], dim=1), cond)
+        u2 = self.up2(torch.cat([F.interpolate(u1, scale_factor=2), d1], dim=1), cond)
 
-        # Get time embedding
-        time_emb = self.time_embedding(t)  # [batch_size, time_embed_dim]
-
-        # Add class information if provided (for guided generation)
-        if class_label is not None:
-            class_emb = self.class_embedding(class_label)  # [batch_size, time_embed_dim]
-            time_emb = time_emb + class_emb
-
-        # Downsampling with skip connections
-        down1_out = self.down1(x, time_emb)
-        down1_pool = F.max_pool2d(down1_out, 2)  # Reduce spatial size by 2x
-
-        down2_out = self.down2(down1_pool, time_emb)
-        down2_pool = F.max_pool2d(down2_out, 2)  # Reduce spatial size by 2x again
-
-        # Middle processing (at lowest resolution)
-        middle_out = self.middle(down2_pool, time_emb)
-
-        # Upsampling with skip connections
-        # Upsample and concatenate with skip connection from down2
-        up1_input = torch.cat([F.interpolate(middle_out, scale_factor=2), down2_out], dim=1)
-        up1_out = self.up1(up1_input, time_emb)
-
-        # Upsample and concatenate with skip connection from down1
-        up2_input = torch.cat([F.interpolate(up1_out, scale_factor=2), down1_out], dim=1)
-        up2_out = self.up2(up2_input, time_emb)
-
-        # Final prediction (noise)
-        noise_pred = self.final(up2_out)
-
-        return noise_pred
-
-
-if __name__ == "__main__":
-    # Test the model
-    model = SimpleUNet(in_channels=1, out_channels=1, channels=64, time_embed_dim=128, num_classes=10)
-
-    # Create dummy input
-    x = torch.randn(2, 1, 28, 28)  # Batch of 2 images
-    t = torch.tensor([100, 500])    # Timesteps
-    class_labels = torch.tensor([3, 7])  # Classes: 3 and 7
-
-    # Forward pass
-    output = model(x, t, class_labels)
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        return self.final(u2)                                        # [B, 1, 28, 28]
